@@ -2,8 +2,8 @@ package dashboardQueries
 
 import (
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
+	"github.com/tidwall/gjson"
 	"io"
 	"net/http"
 )
@@ -57,20 +57,37 @@ func (g *GrafanaClient) checkConnection() error {
 	return nil
 }
 
-func (g *GrafanaClient) Dashboard(id string) (any, error) {
+func (g *GrafanaClient) Dashboard(id string) (Dashboard, error) {
 	resp, err := g.get(fmt.Sprintf("%s/api/dashboards/uid/%s", g.url, id))
 	if err != nil {
-		return nil, err
+		return Dashboard{}, err
 	}
 	dashboardString, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return Dashboard{}, err
 	}
-	var dashboard any
-	err = json.Unmarshal(dashboardString, &dashboard)
-	if err != nil {
-		fmt.Println("Unable to unmarshal dashboard response")
-		return "", err
+
+	panels := gjson.Get(string(dashboardString), "dashboard.panels").Array()
+
+	var queries []Query
+
+	for _, p := range panels {
+		if p.Get("type").String() == "timeseries" {
+			targets := p.Get("targets").Array()
+			for _, t := range targets {
+				queries = append(queries, Query{
+					queryString:    t.Get("expr").String(),
+					datasourceType: t.Get("datasource.type").String(),
+					panelId:        p.Get("id").String(),
+				})
+			}
+		}
+	}
+
+	dashboard := Dashboard{
+		Name:    gjson.Get(string(dashboardString), "meta.slug").String(),
+		UID:     gjson.Get(string(dashboardString), "dashboard.uid").String(),
+		Queries: queries,
 	}
 	return dashboard, nil
 }
